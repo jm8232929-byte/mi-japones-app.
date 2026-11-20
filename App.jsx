@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Component } from 'react';
 import {
   BookOpen,
   Layers,
@@ -535,8 +535,8 @@ const TUTORIAL_STEPS = [
     pointerPos: 'top',
     badge: '7/7 · Práctica y JSON',
     title: 'Sala de Práctica Libre (N5–N1) y Respaldo JSON',
-    what: 'Evaluador abierto a todo el japonés con bocinas 🔊 Leer en JP y 🔊 Leer en ES para oír lo que escribís ANTES de darle a comprobar.',
-    how: 'Escribí en japonés y español, tocá las bocinas para escuchar tu frase en vivo, y usá el botón superior de respaldo para guardar tu copia JSON.',
+    what: 'Evaluador abierto a todo el japonés con la bocina 🔊 Leer en JP en la casilla de japonés para escuchar tu pronunciación ANTES de comprobar.',
+    how: 'Escribí tu oración en japonés arriba (podés escucharla con Leer en JP), anotá tu traducción en español abajo sin pistas y tocá Revisar.',
     why: 'Te permite verificar cualquier oración libremente y respaldar tu progreso en un archivo JSON.'
   }
 ];
@@ -885,11 +885,151 @@ function conjugateJapaneseVerb(verbItem, grammarId, formality, polarityTense) {
 }
 
 // ============================================================================
+// 5.1 ERROR BOUNDARY PARA EVITAR PANTALLAS EN BLANCO
+// ============================================================================
+
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, errorMessage: '' };
+  }
+
+  static getDerivedStateFromError(error) {
+    return {
+      hasError: true,
+      errorMessage: error?.message || 'Ocurrió un error inesperado al renderizar.'
+    };
+  }
+
+  componentDidCatch(error) {
+    // Registro silencioso en consola para diagnóstico
+    if (typeof console !== 'undefined' && console.error) {
+      console.error('MI JAPONÉS ErrorBoundary:', error);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#090d16] text-slate-100 flex items-center justify-center p-5">
+          <div className="max-w-md w-full bg-[#101624] border border-rose-500/40 rounded-3xl p-5 space-y-3 text-center shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-rose-950/60 border border-rose-500/40 flex items-center justify-center mx-auto text-rose-300">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h2 className="font-black text-base text-white">
+              Se detectó un problema al cargar la vista
+            </h2>
+            <p className="text-xs text-slate-300 break-words">
+              {this.state.errorMessage}
+            </p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false, errorMessage: '' })}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Reintentar</span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ============================================================================
 // 6. COMPONENTE PRINCIPAL DE LA APLICACIÓN (100% LOCAL · PALETA FRÍA Y SOBRIA)
 // ============================================================================
 
-export default function App() {
+const TAB_ORDER = ['inventory', 'generator', 'practice', 'saved'];
+
+function MiJaponesApp() {
   const [activeTab, setActiveTab] = useState('inventory');
+  const [exitingTab, setExitingTab] = useState(null);
+  const [tabSlideDirection, setTabSlideDirection] = useState('forward');
+  const [tabAnimSeq, setTabAnimSeq] = useState(0);
+  const tabTransitionTimerRef = useRef(null);
+  const swipeTouchStartRef = useRef(null);
+
+  const handleSwitchTab = (nextTab) => {
+    if (!nextTab || nextTab === activeTab) return;
+    const currentIdx = TAB_ORDER.indexOf(activeTab);
+    const nextIdx = TAB_ORDER.indexOf(nextTab);
+    const direction = nextIdx >= currentIdx ? 'forward' : 'backward';
+
+    if (tabTransitionTimerRef.current) {
+      clearTimeout(tabTransitionTimerRef.current);
+    }
+
+    setExitingTab(activeTab);
+    setTabSlideDirection(direction);
+    setTabAnimSeq((prev) => prev + 1);
+    setActiveTab(nextTab);
+
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      // Ignorar
+    }
+
+    tabTransitionTimerRef.current = setTimeout(() => {
+      setExitingTab(null);
+    }, 420);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (tabTransitionTimerRef.current) {
+        clearTimeout(tabTransitionTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleMainTouchStart = (e) => {
+    if (
+      showSplash ||
+      tutorialPhase !== 'closed' ||
+      quickCatalogModal ||
+      backupModalOpen ||
+      !e.touches ||
+      e.touches.length !== 1
+    ) {
+      swipeTouchStartRef.current = null;
+      return;
+    }
+    const targetTag = e.target?.tagName?.toUpperCase();
+    if (['INPUT', 'TEXTAREA', 'SELECT', 'OPTION'].includes(targetTag)) {
+      swipeTouchStartRef.current = null;
+      return;
+    }
+    swipeTouchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+      time: Date.now()
+    };
+  };
+
+  const handleMainTouchEnd = (e) => {
+    const start = swipeTouchStartRef.current;
+    swipeTouchStartRef.current = null;
+    if (!start || !e.changedTouches || e.changedTouches.length !== 1) return;
+
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    const dt = Date.now() - start.time;
+
+    if (dt > 550 || Math.abs(dx) < 75 || Math.abs(dx) < Math.abs(dy) * 1.8) {
+      return;
+    }
+
+    const currentIdx = TAB_ORDER.indexOf(activeTab);
+    if (dx < 0 && currentIdx < TAB_ORDER.length - 1) {
+      handleSwitchTab(TAB_ORDER[currentIdx + 1]);
+    } else if (dx > 0 && currentIdx > 0) {
+      handleSwitchTab(TAB_ORDER[currentIdx - 1]);
+    }
+  };
 
   // 0. Nombre de Usuario Persistente (verifica localStorage 'mijapones_username_v1')
   const [username, setUsername] = useState(() => {
@@ -1002,6 +1142,8 @@ export default function App() {
   const [freeInputMeaning, setFreeInputMeaning] = useState('');
   const [freeAuditResult, setFreeAuditResult] = useState(null);
   const [livePreviewPracticeBanner, setLivePreviewPracticeBanner] = useState('');
+  const [practiceJpWarning, setPracticeJpWarning] = useState('');
+  const [practiceEsWarning, setPracticeEsWarning] = useState('');
 
   // Estados de Guardadas
   const [savedSearch, setSavedSearch] = useState('');
@@ -1010,7 +1152,10 @@ export default function App() {
   const [speakingId, setSpeakingId] = useState(null);
   const [toastMessage, setToastMessage] = useState(null);
   const audioRef = useRef(null);
-  const audioCtxRef = useRef(null);
+  const voicesRef = useRef([]);
+  const utteranceRef = useRef(null);
+  const speakRequestIdRef = useRef(0);
+  const speakTimersRef = useRef([]);
 
   // Función que activa el recuadro de sugerencia del tutorial deslizándose desde la izquierda
   const openWelcomeTutorialWithSlide = () => {
@@ -1111,6 +1256,12 @@ export default function App() {
   useEffect(() => {
     try {
       document.title = 'MI JAPONÉS N5–N1 · 日本語マスター';
+      if (!document.querySelector('meta[name="referrer"]')) {
+        const meta = document.createElement('meta');
+        meta.name = 'referrer';
+        meta.content = 'no-referrer';
+        document.head.appendChild(meta);
+      }
     } catch {
       // Ignorar
     }
@@ -1145,6 +1296,122 @@ export default function App() {
 
   const containsJapaneseChars = (text) =>
     /[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]/.test(text || '');
+
+  const containsJapaneseScript = (text) =>
+    /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/.test(text || '');
+
+  const containsLatinLetters = (text) => /[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]/.test(text || '');
+
+  const normalizeSpanishMatch = (str) =>
+    (str || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[¡!¿?.,;:()]/g, '')
+      .trim();
+
+  const clearSpeakTimers = () => {
+    speakTimersRef.current.forEach((t) => clearTimeout(t));
+    speakTimersRef.current = [];
+  };
+
+  const registerSpeakTimer = (fn, ms) => {
+    const id = setTimeout(fn, ms);
+    speakTimersRef.current.push(id);
+    return id;
+  };
+
+  // Precargar voces del sistema al montar (evita getVoices() vacío en Chrome Android)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const synth = window.speechSynthesis;
+
+    const loadVoices = () => {
+      try {
+        const list = synth.getVoices() || [];
+        if (list.length > 0) {
+          voicesRef.current = list;
+        }
+      } catch {
+        // Ignorar
+      }
+    };
+
+    loadVoices();
+    if (typeof synth.addEventListener === 'function') {
+      synth.addEventListener('voiceschanged', loadVoices);
+    } else {
+      synth.onvoiceschanged = loadVoices;
+    }
+
+    const t1 = setTimeout(loadVoices, 250);
+    const t2 = setTimeout(loadVoices, 1000);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearSpeakTimers();
+      try {
+        if (typeof synth.removeEventListener === 'function') {
+          synth.removeEventListener('voiceschanged', loadVoices);
+        }
+        if (synth.speaking || synth.pending) {
+          synth.cancel();
+        }
+      } catch {
+        // Ignorar
+      }
+      if (audioRef.current) {
+        try {
+          audioRef.current.pause();
+        } catch {
+          // Ignorar
+        }
+      }
+    };
+  }, []);
+
+  const pickBestVoice = (lang) => {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    const liveVoices = synth ? synth.getVoices() || [] : [];
+    const voices = liveVoices.length > 0 ? liveVoices : voicesRef.current || [];
+    if (voices.length === 0) return null;
+
+    const norm = (v) => (v.lang || '').replace('_', '-').toLowerCase();
+
+    if (lang === 'ja') {
+      return (
+        voices.find((v) => norm(v) === 'ja-jp' && v.localService) ||
+        voices.find((v) => norm(v).startsWith('ja') && v.localService) ||
+        voices.find((v) => norm(v) === 'ja-jp') ||
+        voices.find((v) => norm(v).startsWith('ja')) ||
+        null
+      );
+    }
+
+    const preferredEs = [
+      'es-419',
+      'es-mx',
+      'es-us',
+      'es-ni',
+      'es-cr',
+      'es-gt',
+      'es-sv',
+      'es-hn',
+      'es-pa',
+      'es-co',
+      'es-es'
+    ];
+    for (const code of preferredEs) {
+      const localMatch = voices.find((v) => norm(v) === code && v.localService);
+      if (localMatch) return localMatch;
+    }
+    return (
+      voices.find((v) => norm(v).startsWith('es') && v.localService) ||
+      voices.find((v) => norm(v).startsWith('es')) ||
+      null
+    );
+  };
 
   const resolveLocalTranslation = (rawText, targetLang) => {
     const clean = (rawText || '').trim();
@@ -1186,171 +1453,347 @@ export default function App() {
         return translatedTokens.join(', ');
       }
     } else if (targetLang === 'ja') {
-      const lower = noPunct.toLowerCase();
+      const targetNorm = normalizeSpanishMatch(noPunct);
+      if (!targetNorm) return clean;
+
+      const matchesMeaningExact = (meaningStr) =>
+        (meaningStr || '')
+          .split('/')
+          .map((part) => normalizeSpanishMatch(part.replace(/\([^)]*\)/g, '')))
+          .some((candidate) => candidate && candidate === targetNorm);
+
       for (const [jp, expr] of Object.entries(COMMON_JAPANESE_EXPRESSIONS)) {
-        if (expr.translation.toLowerCase().includes(lower)) return jp;
+        if (matchesMeaningExact(expr.translation)) return jp;
       }
       for (const [jp, data] of Object.entries(BUILTIN_LEXICON)) {
-        if (data.meaning.toLowerCase().includes(lower)) return jp;
+        if (matchesMeaningExact(data.meaning)) return jp;
       }
-      const inInv = inventory.find((i) => i.meaning.toLowerCase().includes(lower));
+      const inInv = inventory.find((i) => matchesMeaningExact(i.meaning));
       if (inInv) return inInv.word;
+      const inTime = TIME_CATALOG.find((t) => matchesMeaningExact(t.meaning));
+      if (inTime) return inTime.word;
+      const inKoso = KOSOADO_CATALOG.find((k) => matchesMeaningExact(k.meaning));
+      if (inKoso) return inKoso.word;
     }
     return clean;
   };
 
-  const playConfirmationTone = () => {
+  const fetchOnlineTranslation = async (text, sourceLang, targetLang) => {
     try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) return;
-      if (!audioCtxRef.current) {
-        audioCtxRef.current = new AudioContextClass();
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(
+        text
+      )}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const translated = data?.[0]?.map((part) => part?.[0]).join('') || '';
+        if (translated.trim()) return translated.trim();
       }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-      gain.gain.setValueAtTime(0.03, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.14);
     } catch {
-      // Ignorar
+      // Probar respaldo
     }
+
+    try {
+      const url2 = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(
+        text
+      )}&langpair=${sourceLang}|${targetLang}`;
+      const res2 = await fetch(url2);
+      if (res2.ok) {
+        const data2 = await res2.json();
+        const translated2 = data2?.responseData?.translatedText || '';
+        if (
+          translated2.trim() &&
+          translated2.trim().toLowerCase() !== text.trim().toLowerCase()
+        ) {
+          return translated2.trim();
+        }
+      }
+    } catch {
+      // Sin conexión
+    }
+
+    return null;
   };
 
-  const speakText = async (rawText, lang = 'ja', btnId = null, previewSection = null) => {
+  const playAudioFallback = (text, lang, reqId) =>
+    new Promise((resolve) => {
+      const tl = lang === 'ja' ? 'ja' : 'es';
+      const chunk = text.slice(0, 180);
+      const urls = [
+        `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=${tl}&q=${encodeURIComponent(
+          chunk
+        )}`,
+        `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${tl}&q=${encodeURIComponent(
+          chunk
+        )}`
+      ];
+
+      let settled = false;
+      const finish = (ok) => {
+        if (!settled) {
+          settled = true;
+          resolve(ok);
+        }
+      };
+
+      const tryIndex = (idx) => {
+        if (speakRequestIdRef.current !== reqId) {
+          finish(false);
+          return;
+        }
+        if (idx >= urls.length) {
+          finish(false);
+          return;
+        }
+        try {
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          }
+          const audio = new Audio(urls[idx]);
+          audio.preload = 'auto';
+          audioRef.current = audio;
+
+          const safetyMs = Math.max(6000, chunk.length * 160);
+          const safetyTimer = registerSpeakTimer(() => finish(true), safetyMs);
+
+          audio.onended = () => {
+            clearTimeout(safetyTimer);
+            finish(true);
+          };
+          audio.onerror = () => {
+            clearTimeout(safetyTimer);
+            tryIndex(idx + 1);
+          };
+
+          const playPromise = audio.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {
+              clearTimeout(safetyTimer);
+              tryIndex(idx + 1);
+            });
+          }
+        } catch {
+          tryIndex(idx + 1);
+        }
+      };
+
+      tryIndex(0);
+    });
+
+  const speakWithWebSpeech = (text, lang, reqId) =>
+    new Promise((resolve) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        resolve(false);
+        return;
+      }
+
+      const synth = window.speechSynthesis;
+      let settled = false;
+      let started = false;
+
+      const finish = (ok) => {
+        if (!settled) {
+          settled = true;
+          resolve(ok);
+        }
+      };
+
+      const startSpeaking = () => {
+        if (speakRequestIdRef.current !== reqId) {
+          finish(false);
+          return;
+        }
+
+        try {
+          if (synth.paused) {
+            synth.resume();
+          }
+
+          const utter = new SpeechSynthesisUtterance(text);
+          const targetVoice = pickBestVoice(lang);
+          utter.lang = targetVoice?.lang || (lang === 'ja' ? 'ja-JP' : 'es-MX');
+          if (targetVoice) {
+            utter.voice = targetVoice;
+          }
+          utter.rate = lang === 'ja' ? 0.92 : 0.96;
+          utter.pitch = 1;
+          utter.volume = 1;
+
+          utteranceRef.current = utter;
+
+          const startWatchdog = registerSpeakTimer(() => {
+            if (!started && !settled) {
+              if (synth.speaking) {
+                started = true;
+                return;
+              }
+              try {
+                if (synth.pending) synth.cancel();
+              } catch {
+                // Ignorar
+              }
+              finish(false);
+            }
+          }, 2000);
+
+          const maxDurationTimer = registerSpeakTimer(
+            () => {
+              finish(started);
+            },
+            Math.max(5500, text.length * 180)
+          );
+
+          utter.onstart = () => {
+            started = true;
+            clearTimeout(startWatchdog);
+          };
+
+          utter.onend = () => {
+            clearTimeout(startWatchdog);
+            clearTimeout(maxDurationTimer);
+            finish(true);
+          };
+
+          utter.onerror = (evt) => {
+            clearTimeout(startWatchdog);
+            clearTimeout(maxDurationTimer);
+            if (speakRequestIdRef.current !== reqId || evt?.error === 'interrupted') {
+              finish(true);
+              return;
+            }
+            finish(false);
+          };
+
+          synth.speak(utter);
+        } catch {
+          finish(false);
+        }
+      };
+
+      try {
+        if (synth.speaking || synth.pending) {
+          synth.cancel();
+          registerSpeakTimer(startSpeaking, 90);
+        } else {
+          startSpeaking();
+        }
+      } catch {
+        finish(false);
+      }
+    });
+
+  const speakText = async (
+    rawText,
+    lang = 'ja',
+    btnId = null,
+    previewSection = null,
+    options = {}
+  ) => {
     const clean = (rawText || '').trim();
-    // Si el cuadro correspondiente está vacío, no lee ni traduce absolutamente nada
     if (!clean) {
       showToast('Escribe algo primero en esa casilla para escucharlo.');
       return;
     }
 
+    if (options.strictJapaneseOnly) {
+      if (!containsJapaneseScript(clean) || containsLatinLetters(clean)) {
+        const warnMsg =
+          'Este espacio es solo para escribir en japonés (hiragana, katakana o kanji).';
+        setPracticeJpWarning(warnMsg);
+        setLivePreviewPracticeBanner('');
+        showToast(warnMsg);
+        return;
+      }
+      setPracticeJpWarning('');
+    }
+
+    const reqId = ++speakRequestIdRef.current;
+    clearSpeakTimers();
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch {
+        // Ignorar
+      }
+    }
+
     setSpeakingId(btnId);
-    playConfirmationTone();
 
     let textToSpeak = clean;
     const hasJp = containsJapaneseChars(clean);
+    let translationFailed = false;
 
     try {
-      if (lang === 'es' && hasJp) {
+      if (options.strictJapaneseOnly) {
+        textToSpeak = clean;
+      } else if (lang === 'es' && hasJp) {
         const localEs = resolveLocalTranslation(clean, 'es');
         if (localEs && !containsJapaneseChars(localEs)) {
           textToSpeak = localEs;
         } else {
-          try {
-            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=es&dt=t&q=${encodeURIComponent(
-              clean
-            )}`;
-            const res = await fetch(url);
-            if (res.ok) {
-              const data = await res.json();
-              const translated = data?.[0]?.map((part) => part?.[0]).join('') || '';
-              if (translated.trim()) textToSpeak = translated.trim();
-            }
-          } catch {
-            textToSpeak = localEs || clean;
+          const onlineEs = await fetchOnlineTranslation(clean, 'ja', 'es');
+          if (onlineEs) {
+            textToSpeak = onlineEs;
+          } else {
+            translationFailed = true;
           }
-        }
-        if (previewSection === 'inventory') {
-          setLivePreviewInventoryBanner(`🔊 Español: "${textToSpeak}"`);
-        } else if (previewSection === 'practice') {
-          setLivePreviewPracticeBanner(`🔊 Español: "${textToSpeak}"`);
         }
       } else if (lang === 'ja' && !hasJp) {
         const localJp = resolveLocalTranslation(clean, 'ja');
         if (localJp && containsJapaneseChars(localJp)) {
           textToSpeak = localJp;
         } else {
-          try {
-            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=es&tl=ja&dt=t&q=${encodeURIComponent(
-              clean
-            )}`;
-            const res = await fetch(url);
-            if (res.ok) {
-              const data = await res.json();
-              const translated = data?.[0]?.map((part) => part?.[0]).join('') || '';
-              if (translated.trim()) textToSpeak = translated.trim();
-            }
-          } catch {
-            textToSpeak = localJp || clean;
+          const onlineJp = await fetchOnlineTranslation(clean, 'es', 'ja');
+          if (onlineJp) {
+            textToSpeak = onlineJp;
+          } else {
+            translationFailed = true;
           }
         }
-        if (previewSection === 'inventory') {
-          setLivePreviewInventoryBanner(`🔊 Japonés: "${textToSpeak}"`);
-        } else if (previewSection === 'practice') {
-          setLivePreviewPracticeBanner(`🔊 Japonés: "${textToSpeak}"`);
-        }
       }
     } catch {
-      // Continuar
+      translationFailed = true;
     }
 
-    let finished = false;
-    const clearSpeakState = () => {
-      if (!finished) {
-        finished = true;
-        setSpeakingId(null);
-      }
-    };
+    if (speakRequestIdRef.current !== reqId) return;
 
-    const fallbackTimer = setTimeout(clearSpeakState, 3800);
-
-    try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(textToSpeak);
-        utter.lang = lang === 'ja' ? 'ja-JP' : 'es-MX';
-        utter.rate = 0.95;
-        const voices = window.speechSynthesis.getVoices() || [];
-        const targetVoice = voices.find((v) =>
-          lang === 'ja'
-            ? v.lang.toLowerCase().includes('ja')
-            : v.lang.toLowerCase().startsWith('es')
-        );
-        if (targetVoice) utter.voice = targetVoice;
-        utter.onend = () => {
-          clearTimeout(fallbackTimer);
-          clearSpeakState();
-        };
-        utter.onerror = () => {
-          clearTimeout(fallbackTimer);
-          clearSpeakState();
-        };
-        window.speechSynthesis.speak(utter);
-        return;
-      }
-    } catch {
-      // Ignorar
+    const previewLabel =
+      lang === 'ja' ? `🔊 Japonés: "${textToSpeak}"` : `🔊 Español: "${textToSpeak}"`;
+    if (previewSection === 'inventory') {
+      setLivePreviewInventoryBanner(previewLabel);
+    } else if (previewSection === 'practice') {
+      setLivePreviewPracticeBanner(previewLabel);
     }
 
-    try {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      const tl = lang === 'ja' ? 'ja' : 'es';
-      const audio = new Audio(
-        `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${tl}&q=${encodeURIComponent(
-          textToSpeak.slice(0, 180)
-        )}`
+    if (translationFailed) {
+      showToast(
+        lang === 'es'
+          ? 'No se pudo traducir al español. Verifica tu conexión a internet.'
+          : 'No se pudo traducir al japonés. Verifica tu conexión a internet.'
       );
-      audioRef.current = audio;
-      audio.onended = () => {
-        clearTimeout(fallbackTimer);
-        clearSpeakState();
-      };
-      audio.onerror = () => {
-        clearTimeout(fallbackTimer);
-        clearSpeakState();
-      };
-      await audio.play();
-    } catch {
-      setTimeout(clearSpeakState, 900);
+      setSpeakingId(null);
+      return;
+    }
+
+    const nativeOk = await speakWithWebSpeech(textToSpeak, lang, reqId);
+    if (speakRequestIdRef.current !== reqId) return;
+
+    if (!nativeOk) {
+      const fallbackOk = await playAudioFallback(textToSpeak, lang, reqId);
+      if (speakRequestIdRef.current !== reqId) return;
+
+      if (!fallbackOk) {
+        showToast(
+          lang === 'ja'
+            ? 'No se pudo reproducir en japonés. Verifica volumen e instala la voz japonesa en Ajustes de Android → Texto a voz.'
+            : 'No se pudo reproducir el audio. Verifica el volumen multimedia y la voz de Texto a voz en Android.'
+        );
+      }
+    }
+
+    if (speakRequestIdRef.current === reqId) {
+      setSpeakingId(null);
     }
   };
 
@@ -1370,7 +1813,7 @@ export default function App() {
     setIdleShowCircle(false);
 
     if (activeTab !== stepObj.tab) {
-      setActiveTab(stepObj.tab);
+      handleSwitchTab(stepObj.tab);
     }
     if (stepObj.targetId === 'tour-gen-categories' && generatorMode !== 'manual_grammar') {
       setGeneratorMode('manual_grammar');
@@ -1381,7 +1824,7 @@ export default function App() {
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    }, 150);
+    }, 420);
 
     return () => clearTimeout(timer);
   }, [tutorialPhase, tutorialStepIdx, activeTab, generatorMode]);
@@ -1422,7 +1865,7 @@ export default function App() {
     setVisitedSubTabs(['what']);
     setHasLearnedSubtabs(false);
     setIdleShowCircle(false);
-    setActiveTab(TUTORIAL_STEPS[0].tab);
+    handleSwitchTab(TUTORIAL_STEPS[0].tab);
     setTutorialPhase('tour');
   };
 
@@ -1942,7 +2385,7 @@ export default function App() {
       setGeneratedResults({
         error: true,
         title: 'Faltan partículas en tu inventario',
-        detail: 'Desplegá el botón "Perfil ▾" o tocá "+助詞" en Inventario para activar partículas como は, を, の o が.'
+        detail: 'Tocá "+助詞 (Partículas)" en la pestaña Inventario para activar partículas como は, を, の o が.'
       });
       return;
     }
@@ -2197,7 +2640,29 @@ export default function App() {
   const handleAuditFreePractice = (e) => {
     if (e) e.preventDefault();
     const raw = freeInputSentence.trim();
-    if (!raw) return;
+    if (!raw) {
+      showToast('Escribe primero una palabra u oración en japonés.');
+      return;
+    }
+
+    if (!containsJapaneseScript(raw) || containsLatinLetters(raw)) {
+      const warnMsg =
+        'Este espacio es solo para escribir en japonés (hiragana, katakana o kanji).';
+      setPracticeJpWarning(warnMsg);
+      setFreeAuditResult(null);
+      showToast(warnMsg);
+      return;
+    }
+    setPracticeJpWarning('');
+
+    if (freeInputMeaning.trim() && containsJapaneseScript(freeInputMeaning)) {
+      const esWarn =
+        'La casilla inferior es solo para escribir tu traducción en español, no en japonés.';
+      setPracticeEsWarning(esWarn);
+      showToast(esWarn);
+      return;
+    }
+    setPracticeEsWarning('');
 
     const cleanNoPunct = raw.replace(/[。！？!?.]/g, '').trim();
 
@@ -2369,6 +2834,1079 @@ export default function App() {
       motivationalIndex % RETURNING_MOTIVATIONAL_MESSAGES.length
     ];
 
+  const activeTabIndex = Math.max(0, TAB_ORDER.indexOf(activeTab));
+
+  const renderTabPanel = (tabKey, isExiting = false) => {
+    const tourId = (id) => (isExiting ? undefined : id);
+    const tourHighlight = (id) => (isExiting ? '' : isTargetHighlighted(id));
+    const tourBubble = (id) => (isExiting ? null : renderInlineTourPointerBubble(id));
+
+    return (
+      <>
+        {/* --------------------------------------------------------------------
+            PESTAÑA 1: INVENTARIO (SIN BOTÓN DE PACK INICIAL)
+        -------------------------------------------------------------------- */}
+        {tabKey === 'inventory' && (
+          <div className="space-y-4">
+            {/* CAJA DE INGRESO Y CLASIFICACIÓN AUTOMÁTICA */}
+            <section
+              id={tourId('tour-input-box')}
+              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${tourHighlight(
+                'tour-input-box'
+              )}`}
+            >
+              <div>
+                <h2 className="font-extrabold text-sm sm:text-base text-white">
+                  Ingresar Vocabulario, Partículas o Usos Gramaticales
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                  Escribí o pegá 1 palabra o un lote de 80+ términos (ej:{' '}
+                  <span className="text-indigo-300 font-bold">
+                    私, 車, 食べる, は, を, ている, causativo
+                  </span>
+                  ). Usá las bocinas para escuchar lo que escribiste antes de clasificarlo.
+                </p>
+              </div>
+
+              {livePreviewInventoryBanner && (
+                <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-sky-500/40 rounded-xl px-3 py-2 text-xs text-sky-200 font-semibold">
+                  <span>{livePreviewInventoryBanner}</span>
+                  <button
+                    type="button"
+                    onClick={() => setLivePreviewInventoryBanner('')}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-[11px] font-bold text-slate-400">
+                  Escuchar en japonés o su traducción al español:
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => speakText(rawBatchInput, 'ja', 'inv-input-ja', 'inventory')}
+                    className={`px-3 py-1 rounded-full border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                      speakingId === 'inv-input-ja'
+                        ? 'bg-teal-600 text-white border-teal-400'
+                        : 'bg-slate-900 hover:bg-slate-800 border-teal-500/40 text-teal-300'
+                    }`}
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Leer en JP</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => speakText(rawBatchInput, 'es', 'inv-input-es', 'inventory')}
+                    className={`px-3 py-1 rounded-full border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                      speakingId === 'inv-input-es'
+                        ? 'bg-sky-600 text-white border-sky-400'
+                        : 'bg-slate-900 hover:bg-slate-800 border-sky-500/40 text-sky-300'
+                    }`}
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Leer en ES</span>
+                  </button>
+                </div>
+              </div>
+
+              <form onSubmit={handleAnalyzeAndAddBatch} className="space-y-3">
+                <textarea
+                  rows={3}
+                  value={rawBatchInput}
+                  onChange={(e) => setRawBatchInput(e.target.value)}
+                  placeholder="Pegá tus palabras, partículas o usos gramaticales (ej: 私, 車, 食べる, 飲む, 高い, この, 今日, は, を, の, ている, causativo)..."
+                  className="w-full bg-[#090d16] border border-slate-800 focus:border-indigo-400 rounded-2xl p-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none leading-relaxed"
+                />
+
+                {/* CATÁLOGOS DE 1 TOQUE */}
+                <div
+                  id={tourId('tour-quick-catalogs')}
+                  className={`flex items-center gap-1.5 flex-wrap pt-0.5 ${tourHighlight(
+                    'tour-quick-catalogs'
+                  )}`}
+                >
+                  <span className="text-[11px] text-slate-400 font-semibold mr-1">
+                    Catálogos de 1 toque:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setQuickCatalogModal('particles')}
+                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 text-[11px] font-bold transition"
+                  >
+                    +助詞 (Partículas)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickCatalogModal('kosoado')}
+                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 text-[11px] font-bold transition"
+                  >
+                    +こそあど
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickCatalogModal('time')}
+                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-[11px] font-bold transition"
+                  >
+                    +時間 (Tiempo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickCatalogModal('grammar')}
+                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-bold transition"
+                  >
+                    +文法 (Gramática)
+                  </button>
+                </div>
+
+                {tourBubble('tour-quick-catalogs')}
+
+                <button
+                  type="submit"
+                  className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Analizar y Clasificar Automáticamente</span>
+                </button>
+              </form>
+
+              {tourBubble('tour-input-box')}
+            </section>
+
+            {/* CARPETAS DINÁMICAS DEL INVENTARIO */}
+            <section
+              id={tourId('tour-folders')}
+              className={`space-y-3 ${tourHighlight('tour-folders')}`}
+            >
+              {inventory.length > 0 && (
+                <div className="flex items-center justify-between gap-2 bg-[#101624] border border-slate-800 rounded-2xl px-3.5 py-2.5">
+                  <input
+                    type="text"
+                    value={inventorySearch}
+                    onChange={(e) => setInventorySearch(e.target.value)}
+                    placeholder="Buscar palabra, lectura o carpeta en tu inventario..."
+                    className="w-full bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none"
+                  />
+                  {inventorySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setInventorySearch('')}
+                      className="text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {inventory.length === 0 ? (
+                <div className="bg-[#101624] border border-slate-800 rounded-3xl p-7 text-center space-y-2.5">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center mx-auto text-indigo-400">
+                    <Folder className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-extrabold text-sm sm:text-base text-white">
+                    {username
+                      ? `Todavía no tenés palabras cargadas, ${username}`
+                      : 'Todavía no tenés palabras cargadas'}
+                  </h3>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Esta sección es exclusivamente para lo que vos ya aprendiste. Ingresá tus
+                    propias palabras y partículas arriba o activalas desde los catálogos rápidos
+                    para que el sistema cree cada carpeta gramatical a tu medida.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {groupedFolders.map(([folderName, items]) => {
+                    const isCollapsed = !!collapsedFolders[folderName];
+                    return (
+                      <div
+                        key={folderName}
+                        className="bg-[#101624] border border-slate-800 rounded-2xl overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCollapsedFolders((prev) => ({
+                              ...prev,
+                              [folderName]: !prev[folderName]
+                            }))
+                          }
+                          className="w-full px-4 py-3 flex items-center justify-between bg-slate-900/60 hover:bg-slate-900 transition text-left"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Folder className="w-4 h-4 text-indigo-400 shrink-0" />
+                            <span className="font-extrabold text-xs sm:text-sm text-white truncate">
+                              {folderName}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-sky-300 text-[10px] font-bold">
+                              {items.length}
+                            </span>
+                          </div>
+                          {isCollapsed ? (
+                            <ChevronDown className="w-4 h-4 text-slate-400" />
+                          ) : (
+                            <ChevronUp className="w-4 h-4 text-slate-400" />
+                          )}
+                        </button>
+
+                        {!isCollapsed && (
+                          <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {items.map((item) => (
+                              <div
+                                key={item.id}
+                                className="bg-[#090d16] border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between gap-2"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-black text-base text-white">
+                                        {item.word}
+                                      </span>
+                                      <span className="text-[11px] text-indigo-300 font-semibold">
+                                        {item.reading}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-bold text-teal-300 mt-0.5">
+                                      {item.meaning}
+                                    </p>
+                                    {item.notes && (
+                                      <p className="text-[11px] text-slate-400 mt-1 leading-snug">
+                                        {item.notes}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        speakText(item.word, 'ja', `item-ja-${item.id}`)
+                                      }
+                                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-[10px] font-bold"
+                                      title="Escuchar en japonés"
+                                    >
+                                      JP
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        speakText(item.meaning, 'es', `item-es-${item.id}`)
+                                      }
+                                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 text-[10px] font-bold"
+                                      title="Escuchar significado en español"
+                                    >
+                                      ES
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setInventory((prev) =>
+                                          prev.filter((x) => x.id !== item.id)
+                                        )
+                                      }
+                                      className="p-1 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-800 text-slate-400 hover:text-rose-300"
+                                      title="Eliminar"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {tourBubble('tour-folders')}
+            </section>
+          </div>
+        )}
+
+        {/* --------------------------------------------------------------------
+            PESTAÑA 2: GENERADOR DE ORACIONES (100% CERRADO N5 A N1)
+        -------------------------------------------------------------------- */}
+        {tabKey === 'generator' && (
+          <div className="space-y-4">
+            <section
+              id={tourId('tour-gen-modes')}
+              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${tourHighlight(
+                'tour-gen-modes'
+              )}`}
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h2 className="font-extrabold text-sm sm:text-base text-white">
+                    Generador Estructural de Circuito Cerrado (N5–N1)
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Construye oraciones combinando únicamente el vocabulario y partículas de tu
+                    inventario.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGeneratorMode('inventory_logic')}
+                  className={`p-3 rounded-2xl border text-left transition ${
+                    generatorMode === 'inventory_logic'
+                      ? 'bg-indigo-600/20 border-indigo-400 text-white'
+                      : 'bg-[#090d16] border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <span className="font-extrabold text-xs block text-white">
+                    1. Según mi Inventario (Automático)
+                  </span>
+                  <span className="text-[11px] text-slate-400 mt-0.5 block">
+                    Deduce las estructuras según los usos y partículas que ya cargaste.
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setGeneratorMode('manual_grammar')}
+                  className={`p-3 rounded-2xl border text-left transition ${
+                    generatorMode === 'manual_grammar'
+                      ? 'bg-sky-600/20 border-sky-400 text-white'
+                      : 'bg-[#090d16] border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <span className="font-extrabold text-xs block text-white">
+                    2. Elegir Usos Gramaticales (9 Categorías)
+                  </span>
+                  <span className="text-[11px] text-slate-400 mt-0.5 block">
+                    Seleccioná manualmente las reglas de N5 a N1 que querés practicar.
+                  </span>
+                </button>
+              </div>
+
+              {tourBubble('tour-gen-modes')}
+            </section>
+
+            {/* PANEL DE LAS 9 CATEGORÍAS Y CONTROLES DE FORMALIDAD / TIEMPO */}
+            <section
+              id={tourId('tour-gen-categories')}
+              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${tourHighlight(
+                'tour-gen-categories'
+              )}`}
+            >
+              {generatorMode === 'manual_grammar' && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-extrabold text-white">
+                      Seleccioná entre las 9 Categorías Gramaticales (N5–N1):
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {['ALL', 'N5', 'N4', 'N3', 'N2', 'N1'].map((lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => setGrammarLevelFilter(lvl)}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                            grammarLevelFilter === lvl
+                              ? 'bg-indigo-600 border-indigo-400 text-white'
+                              : 'bg-slate-900 border-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {lvl === 'ALL' ? 'Todos' : lvl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                    {GRAMMAR_CATEGORIES.map((cat) => {
+                      const visibleItems = cat.items.filter((item) => {
+                        if (grammarLevelFilter !== 'ALL' && item.level !== grammarLevelFilter)
+                          return false;
+                        if (!grammarSearch.trim()) return true;
+                        const q = grammarSearch.toLowerCase();
+                        return (
+                          item.name.toLowerCase().includes(q) ||
+                          item.formula.toLowerCase().includes(q) ||
+                          item.desc.toLowerCase().includes(q)
+                        );
+                      });
+                      if (visibleItems.length === 0) return null;
+                      const isOpen = !!openCategories[cat.id];
+
+                      return (
+                        <div
+                          key={cat.id}
+                          className="bg-[#090d16] border border-slate-800 rounded-2xl overflow-hidden"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenCategories((prev) => ({
+                                ...prev,
+                                [cat.id]: !prev[cat.id]
+                              }))
+                            }
+                            className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-slate-900/70 transition"
+                          >
+                            <div>
+                              <span className="font-extrabold text-xs text-white">
+                                {cat.number}. {cat.title}
+                              </span>
+                              <p className="text-[10px] text-slate-400">{cat.subtitle}</p>
+                            </div>
+                            {isOpen ? (
+                              <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                            )}
+                          </button>
+
+                          {isOpen && (
+                            <div className="p-2.5 pt-0 space-y-1.5">
+                              {visibleItems.map((gItem) => {
+                                const isChecked = selectedGrammarIds.includes(gItem.id);
+                                return (
+                                  <button
+                                    key={gItem.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setSelectedGrammarIds((prev) =>
+                                        prev.includes(gItem.id)
+                                          ? prev.length > 1
+                                            ? prev.filter((x) => x !== gItem.id)
+                                            : prev
+                                          : [...prev, gItem.id]
+                                      )
+                                    }
+                                    className={`w-full p-2.5 rounded-xl border text-left flex items-start gap-2.5 transition ${
+                                      isChecked
+                                        ? 'bg-indigo-600/20 border-indigo-400 text-white'
+                                        : 'bg-slate-950/60 border-slate-800/80 text-slate-300'
+                                    }`}
+                                  >
+                                    <div
+                                      className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border shrink-0 ${
+                                        isChecked
+                                          ? 'bg-indigo-500 border-indigo-300 text-white'
+                                          : 'border-slate-700 bg-slate-900'
+                                      }`}
+                                    >
+                                      {isChecked && <Check className="w-3 h-3" />}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="px-1.5 py-0.2 rounded bg-slate-800 text-sky-300 font-black text-[10px]">
+                                          {gItem.level}
+                                        </span>
+                                        <span className="font-extrabold text-xs text-white">
+                                          {gItem.name}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-indigo-300 font-semibold mt-0.5">
+                                        {gItem.formula}
+                                      </p>
+                                      <p className="text-[10px] text-slate-400 mt-0.5">
+                                        {gItem.desc}
+                                      </p>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                    Registro (Formal / Informal):
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5 bg-[#090d16] p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setFormality('formal')}
+                      className={`py-2 rounded-lg text-xs font-extrabold transition ${
+                        formality === 'formal'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Formal (です・ます)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormality('informal')}
+                      className={`py-2 rounded-lg text-xs font-extrabold transition ${
+                        formality === 'informal'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Informal (普通形)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-400 block mb-1">
+                    Tiempo y Polaridad:
+                  </label>
+                  <select
+                    value={polarityTense}
+                    onChange={(e) => setPolarityTense(e.target.value)}
+                    className="w-full bg-[#090d16] border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none"
+                  >
+                    <option value="present_aff">Afirmativo (Presente / Futuro)</option>
+                    <option value="present_neg">Negativo (Presente / Futuro)</option>
+                    <option value="past_aff">Pasado Afirmativo</option>
+                    <option value="past_neg">Pasado Negativo</option>
+                    <option value="question">Interrogativo (Pregunta か)</option>
+                  </select>
+                </div>
+              </div>
+
+              {tourBubble('tour-gen-categories')}
+            </section>
+
+            {/* BOTÓN DE GENERACIÓN CERRADA */}
+            <section
+              id={tourId('tour-gen-button')}
+              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${tourHighlight(
+                'tour-gen-button'
+              )}`}
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-400">Cantidad:</span>
+                  {[1, 3, 5].map((cnt) => (
+                    <button
+                      key={cnt}
+                      type="button"
+                      onClick={() => setSentenceCount(cnt)}
+                      className={`px-3 py-1 rounded-xl text-xs font-extrabold border ${
+                        sentenceCount === cnt
+                          ? 'bg-indigo-600 border-indigo-400 text-white'
+                          : 'bg-[#090d16] border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {cnt} {cnt === 1 ? 'oración' : 'oraciones'}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowReadings((prev) => !prev)}
+                  className="px-3 py-1 rounded-xl bg-[#090d16] border border-slate-800 text-slate-300 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{showReadings ? 'Ocultar Lectura' : 'Mostrar Lectura'}</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGenerateClosedSentences}
+                className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition"
+              >
+                <Play className="w-4 h-4" />
+                <span>Generar Oraciones (100% Cerrado)</span>
+              </button>
+
+              {tourBubble('tour-gen-button')}
+            </section>
+
+            {/* RESULTADOS DEL GENERADOR */}
+            {generatedResults && (
+              <div className="space-y-3">
+                {generatedResults.error ? (
+                  <div className="bg-rose-950/40 border border-rose-500/40 rounded-2xl p-4 space-y-1.5">
+                    <h3 className="font-extrabold text-xs sm:text-sm text-rose-200 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{generatedResults.title}</span>
+                    </h3>
+                    <p className="text-xs text-slate-300">{generatedResults.detail}</p>
+                  </div>
+                ) : (
+                  generatedResults.items.map((sent) => {
+                    const isSaved = savedSentences.some((s) => s.japanese === sent.japanese);
+                    return (
+                      <div
+                        key={sent.id}
+                        className="bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 font-black text-[10px]">
+                              {sent.level}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-sky-300 font-bold text-[10px]">
+                              {sent.grammarName}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-semibold">
+                              {sent.formalityLabel}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => speakText(sent.japanese, 'ja', `gen-ja-${sent.id}`)}
+                              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-[11px] font-bold flex items-center gap-1"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                              <span>JP</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => speakText(sent.translation, 'es', `gen-es-${sent.id}`)}
+                              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                              <span>ES</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleSaveSentence(sent)}
+                              className={`p-1.5 rounded-xl border transition ${
+                                isSaved
+                                  ? 'bg-indigo-600/30 border-indigo-400 text-indigo-200'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                              title="Guardar oración"
+                            >
+                              <Bookmark className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="bg-[#090d16] border border-slate-800/90 rounded-2xl p-3.5 space-y-1.5">
+                          <p className="text-lg sm:text-xl font-black text-white tracking-wide">
+                            {sent.japanese}
+                          </p>
+                          {showReadings && (
+                            <p className="text-xs text-indigo-300 font-semibold">{sent.reading}</p>
+                          )}
+                          <p className="text-sm font-bold text-teal-300 pt-0.5">
+                            {sent.translation}
+                          </p>
+                          <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-800/80">
+                            <b className="text-slate-300">Estructura literal:</b>{' '}
+                            {sent.literalTranslation}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {sent.tokens.map((tok, tIdx) => (
+                            <div
+                              key={`${sent.id}-tok-${tIdx}`}
+                              className="bg-[#090d16] border border-slate-800/80 rounded-xl p-2.5"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-black text-xs text-white">{tok.surface}</span>
+                                <span className="text-[10px] font-bold text-sky-300">
+                                  {tok.role}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                                {tok.detail}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --------------------------------------------------------------------
+            PESTAÑA 3: SALA DE PRÁCTICA LIBRE (BOCINAS INDEPENDIENTES + AUDITOR)
+        -------------------------------------------------------------------- */}
+        {tabKey === 'practice' && (
+          <div className="space-y-4">
+            <section
+              id={tourId('tour-practice-room')}
+              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3.5 shadow-lg ${tourHighlight(
+                'tour-practice-room'
+              )}`}
+            >
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <PenTool className="w-4 h-4 text-teal-400 shrink-0" />
+                  <h2 className="font-extrabold text-sm sm:text-base text-white">
+                    {username
+                      ? `Sala de Práctica Libre de ${username} (N5 a N1)`
+                      : 'Sala de Práctica Libre (N5 a N1)'}
+                  </h2>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setBackupModalOpen(true)}
+                  className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-indigo-500/40 text-indigo-300 text-[11px] font-bold flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Respaldo JSON</span>
+                </button>
+              </div>
+
+              {/* CHIPS DE APOYO PARA INSERTAR RÁPIDO */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {[
+                    { id: 'kosoado', label: 'こそあど' },
+                    { id: 'time', label: 'Tiempo' },
+                    { id: 'particles', label: 'Partículas' }
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setPracticeTabChip(tab.id)}
+                      className={`px-3 py-1 rounded-full text-[11px] font-extrabold border transition ${
+                        practiceTabChip === tab.id
+                          ? 'bg-teal-950/80 border-teal-400 text-teal-300'
+                          : 'bg-[#090d16] border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="bg-[#090d16] border border-slate-800 rounded-2xl p-2.5 flex items-center gap-1.5 flex-wrap max-h-32 overflow-y-auto">
+                  {(practiceTabChip === 'kosoado'
+                    ? KOSOADO_CATALOG.slice(0, 8)
+                    : practiceTabChip === 'time'
+                    ? TIME_CATALOG.slice(0, 8)
+                    : PARTICLE_CATALOG.slice(0, 10)
+                  ).map((chip) => (
+                    <button
+                      key={chip.word}
+                      type="button"
+                      onClick={() => setFreeInputSentence((prev) => `${prev}${chip.word}`)}
+                      className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-white font-bold flex items-center gap-1.5 transition"
+                    >
+                      <span>{chip.word}</span>
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        {chip.meaning.split('/')[0]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {livePreviewPracticeBanner && (
+                <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-sky-500/40 rounded-xl px-3 py-2 text-xs text-sky-200 font-semibold">
+                  <span>{livePreviewPracticeBanner}</span>
+                  <button
+                    type="button"
+                    onClick={() => setLivePreviewPracticeBanner('')}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              <form onSubmit={handleAuditFreePractice} className="space-y-3">
+                {/* CAJA 1: ORACIÓN EN JAPONÉS (SOLO LECTURA EN JAPONÉS) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <label className="text-xs font-bold text-slate-300">
+                      Tu oración o palabra en Japonés:
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          speakText(freeInputSentence, 'ja', 'prac-jp-ja', 'practice', {
+                            strictJapaneseOnly: true
+                          })
+                        }
+                        className={`px-3 py-1 rounded-full border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                          speakingId === 'prac-jp-ja'
+                            ? 'bg-teal-600 text-white border-teal-400'
+                            : 'bg-slate-900 hover:bg-slate-800 border-teal-500/40 text-teal-300'
+                        }`}
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>{speakingId === 'prac-jp-ja' ? 'Leyendo JP...' : 'Leer en JP'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <textarea
+                    rows={2}
+                    value={freeInputSentence}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFreeInputSentence(val);
+                      if (practiceJpWarning && (!val.trim() || (containsJapaneseScript(val) && !containsLatinLetters(val)))) {
+                        setPracticeJpWarning('');
+                      }
+                    }}
+                    placeholder="Escribí cualquier oración o saludo en japonés (ej: こんにちは, おはよう, 私は車を買う)..."
+                    className={`w-full bg-[#090d16] border rounded-2xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none ${
+                      practiceJpWarning
+                        ? 'border-amber-500/70 focus:border-amber-400'
+                        : 'border-slate-800 focus:border-teal-400'
+                    }`}
+                  />
+
+                  {practiceJpWarning && (
+                    <div className="flex items-center gap-1.5 bg-amber-950/50 border border-amber-500/40 rounded-xl px-3 py-2 text-[11px] text-amber-200 font-semibold">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>{practiceJpWarning}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* CAJA 2: SIGNIFICADO EN ESPAÑOL (SIN BOTONES DE TRADUCCIÓN NI AUDIO) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <label className="text-xs font-bold text-slate-300">
+                      Significado o traducción en Español:
+                    </label>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={freeInputMeaning}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFreeInputMeaning(val);
+                      if (containsJapaneseScript(val)) {
+                        setPracticeEsWarning(
+                          'Este espacio es solo para escribir en español, no en japonés.'
+                        );
+                      } else {
+                        setPracticeEsWarning('');
+                      }
+                    }}
+                    placeholder="Opcional: ¿Qué quisiste decir en español?"
+                    className={`w-full bg-[#090d16] border rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none ${
+                      practiceEsWarning
+                        ? 'border-amber-500/70 focus:border-amber-400'
+                        : 'border-slate-800 focus:border-teal-400'
+                    }`}
+                  />
+
+                  {practiceEsWarning && (
+                    <div className="flex items-center gap-1.5 bg-amber-950/50 border border-amber-500/40 rounded-xl px-3 py-2 text-[11px] text-amber-200 font-semibold">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>{practiceEsWarning}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="flex-1 py-3 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Revisar Gramática y Partículas</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFreeInputSentence('');
+                      setFreeInputMeaning('');
+                      setFreeAuditResult(null);
+                      setLivePreviewPracticeBanner('');
+                      setPracticeJpWarning('');
+                      setPracticeEsWarning('');
+                    }}
+                    className="px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-xs"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </form>
+
+              {tourBubble('tour-practice-room')}
+            </section>
+
+            {/* RESULTADO DEL AUDITOR DE PRÁCTICA LIBRE */}
+            {freeAuditResult && (
+              <div className="bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`px-3 py-0.5 rounded-full text-xs font-black border ${
+                      freeAuditResult.isValid
+                        ? 'bg-teal-950/80 border-teal-500/40 text-teal-300'
+                        : 'bg-amber-950/80 border-amber-500/40 text-amber-300'
+                    }`}
+                  >
+                    {freeAuditResult.score}
+                  </span>
+                  <span className="text-xs font-black text-indigo-300">
+                    {freeAuditResult.level}
+                  </span>
+                </div>
+
+                <div className="bg-[#090d16] border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold block">
+                      Oración verificada:
+                    </span>
+                    <p className="text-lg font-black text-white mt-0.5">
+                      {freeAuditResult.verifiedSentence}
+                    </p>
+                    <p className="text-xs font-bold text-teal-300 mt-0.5">
+                      {freeAuditResult.translation}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        speakText(freeAuditResult.verifiedSentence, 'ja', 'audit-res-ja')
+                      }
+                      className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-xs font-bold flex items-center gap-1"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>Audio JP</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        speakText(freeAuditResult.translation, 'es', 'audit-res-es')
+                      }
+                      className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center gap-1"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>Audio ES</span>
+                    </button>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">{freeAuditResult.feedback}</p>
+
+                <div className="space-y-2">
+                  {freeAuditResult.tokens.map((tok, i) => (
+                    <div
+                      key={`audit-tok-${i}`}
+                      className="bg-[#090d16] border border-slate-800/90 rounded-xl p-3"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-black text-xs text-white">{tok.surface}</span>
+                        <span className="text-[10px] font-bold text-sky-300">{tok.role}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">{tok.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --------------------------------------------------------------------
+            PESTAÑA 4: ORACIONES GUARDADAS
+        -------------------------------------------------------------------- */}
+        {tabKey === 'saved' && (
+          <div className="space-y-3">
+            <div className="bg-[#101624] border border-slate-800 rounded-3xl p-4 flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h2 className="font-extrabold text-sm sm:text-base text-white">
+                  Oraciones Guardadas ({savedSentences.length})
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Tus estructuras favoritas listas para repasar o exportar en JSON.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleExportJSON}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-indigo-500/40 text-indigo-300 text-xs font-bold flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Exportar JSON</span>
+              </button>
+            </div>
+
+            {savedSentences.length === 0 ? (
+              <div className="bg-[#101624] border border-slate-800 rounded-3xl p-7 text-center space-y-2">
+                <Bookmark className="w-8 h-8 text-indigo-400 mx-auto" />
+                <p className="font-bold text-sm text-white">Aún no guardaste oraciones</p>
+                <p className="text-xs text-slate-400">
+                  Tocá el ícono de marcador en el Generador para conservar las oraciones que más te
+                  sirvan.
+                </p>
+              </div>
+            ) : (
+              savedSentences
+                .filter((s) =>
+                  !savedSearch.trim()
+                    ? true
+                    : s.japanese.toLowerCase().includes(savedSearch.toLowerCase()) ||
+                      s.translation.toLowerCase().includes(savedSearch.toLowerCase())
+                )
+                .map((sent, idx) => (
+                  <div
+                    key={`saved-${idx}`}
+                    className="bg-[#101624] border border-slate-800 rounded-2xl p-4 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-base sm:text-lg font-black text-white">
+                          {sent.japanese}
+                        </p>
+                        <p className="text-xs font-bold text-teal-300 mt-0.5">
+                          {sent.translation}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => speakText(sent.japanese, 'ja', `sav-ja-${idx}`)}
+                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 text-[10px] font-bold"
+                        >
+                          JP
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => speakText(sent.translation, 'es', `sav-es-${idx}`)}
+                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-sky-300 text-[10px] font-bold"
+                        >
+                          ES
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleSaveSentence(sent)}
+                          className="p-1 rounded-lg bg-slate-900 border border-slate-800 text-rose-300"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
       <style>{`
@@ -2428,6 +3966,46 @@ export default function App() {
           }
           50% {
             transform: translateY(-3px);
+          }
+        }
+        @keyframes tabSlideInRight {
+          0% {
+            opacity: 0.2;
+            transform: translate3d(100%, 0, 0) scale(0.985);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+        }
+        @keyframes tabSlideOutLeft {
+          0% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+          100% {
+            opacity: 0;
+            transform: translate3d(-100%, 0, 0) scale(0.975);
+          }
+        }
+        @keyframes tabSlideInLeft {
+          0% {
+            opacity: 0.2;
+            transform: translate3d(-100%, 0, 0) scale(0.985);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+        }
+        @keyframes tabSlideOutRight {
+          0% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+          100% {
+            opacity: 0;
+            transform: translate3d(100%, 0, 0) scale(0.975);
           }
         }
       `}</style>
@@ -2618,11 +4196,6 @@ export default function App() {
                 </form>
               ) : (
                 <div className="bg-[#101624] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-2xl space-y-2.5 text-center relative overflow-hidden">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 text-[10px] font-extrabold">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                    <span>MENSAJE DE HOY · {(motivationalIndex % 8) + 1}/8</span>
-                  </div>
-
                   <h2 className="font-black text-base sm:text-lg text-sky-200 tracking-wide leading-snug">
                     {currentMotivationalObj.headline(username || 'Estudiante')}
                   </h2>
@@ -2714,9 +4287,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* CAJÓN DESPLEGABLE DE PERFIL (NOMBRE DE SOLO LECTURA + ESTADÍSTICAS + CATÁLOGOS RÁPIDOS) */}
+        {/* CAJÓN DESPLEGABLE DE PERFIL (LIMPIO: SOLO RESUMEN DEL ESTUDIANTE) */}
         {headerExpanded && (
-          <div className="max-w-3xl mx-auto px-3 pb-3 pt-1 border-t border-slate-800/80 bg-[#0d1322] space-y-3">
+          <div className="max-w-3xl mx-auto px-3 pb-3 pt-2 border-t border-slate-800/80 bg-[#0d1322]">
             <div className="flex items-center justify-between flex-wrap gap-2 bg-[#090d16] border border-slate-800 rounded-2xl px-3.5 py-2.5">
               <div className="flex items-center gap-2">
                 <User className="w-4 h-4 text-teal-400 shrink-0" />
@@ -2743,1094 +4316,52 @@ export default function App() {
                 </span>
               </div>
             </div>
-
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] text-slate-400 font-bold mr-1">
-                Catálogos rápidos:
-              </span>
-              <button
-                type="button"
-                onClick={() => setQuickCatalogModal('particles')}
-                className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 text-[11px] font-bold transition"
-              >
-                +助詞 (Partículas)
-              </button>
-              <button
-                type="button"
-                onClick={() => setQuickCatalogModal('kosoado')}
-                className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 text-[11px] font-bold transition"
-              >
-                +こそあど
-              </button>
-              <button
-                type="button"
-                onClick={() => setQuickCatalogModal('time')}
-                className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-[11px] font-bold transition"
-              >
-                +時間 (Tiempo)
-              </button>
-              <button
-                type="button"
-                onClick={() => setQuickCatalogModal('grammar')}
-                className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-bold transition"
-              >
-                +文法 (Gramática)
-              </button>
-            </div>
           </div>
         )}
       </header>
 
       {/* ========================================================================
-          2. CONTENIDO PRINCIPAL DE LAS 4 PESTAÑAS (SIEMPRE VISIBLE EN PANTALLA)
+          2. CONTENIDO PRINCIPAL DE LAS 4 PESTAÑAS (TRANSICIÓN DESLIZANTE DINÁMICA)
       ======================================================================== */}
-      <main className="flex-1 max-w-3xl w-full mx-auto px-3 pt-4 pb-28 space-y-4">
-        {/* --------------------------------------------------------------------
-            PESTAÑA 1: INVENTARIO (SIN BOTÓN DE PACK INICIAL)
-        -------------------------------------------------------------------- */}
-        {activeTab === 'inventory' && (
-          <div className="space-y-4">
-            {/* CAJA DE INGRESO Y CLASIFICACIÓN AUTOMÁTICA */}
-            <section
-              id="tour-input-box"
-              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${isTargetHighlighted(
-                'tour-input-box'
-              )}`}
+      <main
+        onTouchStart={handleMainTouchStart}
+        onTouchEnd={handleMainTouchEnd}
+        className="flex-1 max-w-3xl w-full mx-auto px-3 pt-4 pb-28 overflow-x-hidden"
+      >
+        <div className="relative w-full">
+          {exitingTab && (
+            <div
+              key={`tab-exit-${exitingTab}-${tabAnimSeq}`}
+              aria-hidden="true"
+              className="absolute inset-x-0 top-0 w-full pointer-events-none select-none z-10 will-change-transform"
+              style={{
+                animation:
+                  tabSlideDirection === 'forward'
+                    ? 'tabSlideOutLeft 380ms cubic-bezier(0.22, 1, 0.36, 1) forwards'
+                    : 'tabSlideOutRight 380ms cubic-bezier(0.22, 1, 0.36, 1) forwards'
+              }}
             >
-              <div>
-                <h2 className="font-extrabold text-sm sm:text-base text-white">
-                  Ingresar Vocabulario, Partículas o Usos Gramaticales
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                  Escribí o pegá 1 palabra o un lote de 80+ términos (ej:{' '}
-                  <span className="text-indigo-300 font-bold">
-                    私, 車, 食べる, は, を, ている, causativo
-                  </span>
-                  ). Usá las bocinas para escuchar lo que escribiste antes de clasificarlo.
-                </p>
-              </div>
-
-              {livePreviewInventoryBanner && (
-                <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-sky-500/40 rounded-xl px-3 py-2 text-xs text-sky-200 font-semibold">
-                  <span>{livePreviewInventoryBanner}</span>
-                  <button
-                    type="button"
-                    onClick={() => setLivePreviewInventoryBanner('')}
-                    className="text-slate-400 hover:text-white"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-[11px] font-bold text-slate-400">
-                  Escuchar en japonés o su traducción al español:
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => speakText(rawBatchInput, 'ja', 'inv-input-ja', 'inventory')}
-                    className={`px-3 py-1 rounded-full border text-[11px] font-bold flex items-center gap-1.5 transition ${
-                      speakingId === 'inv-input-ja'
-                        ? 'bg-teal-600 text-white border-teal-400'
-                        : 'bg-slate-900 hover:bg-slate-800 border-teal-500/40 text-teal-300'
-                    }`}
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                    <span>Leer en JP</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => speakText(rawBatchInput, 'es', 'inv-input-es', 'inventory')}
-                    className={`px-3 py-1 rounded-full border text-[11px] font-bold flex items-center gap-1.5 transition ${
-                      speakingId === 'inv-input-es'
-                        ? 'bg-sky-600 text-white border-sky-400'
-                        : 'bg-slate-900 hover:bg-slate-800 border-sky-500/40 text-sky-300'
-                    }`}
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                    <span>Leer en ES</span>
-                  </button>
-                </div>
-              </div>
-
-              <form onSubmit={handleAnalyzeAndAddBatch} className="space-y-3">
-                <textarea
-                  rows={3}
-                  value={rawBatchInput}
-                  onChange={(e) => setRawBatchInput(e.target.value)}
-                  placeholder="Pegá tus palabras, partículas o usos gramaticales (ej: 私, 車, 食べる, 飲む, 高い, この, 今日, は, を, の, ている, causativo)..."
-                  className="w-full bg-[#090d16] border border-slate-800 focus:border-indigo-400 rounded-2xl p-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none leading-relaxed"
-                />
-
-                {/* CATÁLOGOS DE 1 TOQUE */}
-                <div
-                  id="tour-quick-catalogs"
-                  className={`flex items-center gap-1.5 flex-wrap pt-0.5 ${isTargetHighlighted(
-                    'tour-quick-catalogs'
-                  )}`}
-                >
-                  <span className="text-[11px] text-slate-400 font-semibold mr-1">
-                    Catálogos de 1 toque:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setQuickCatalogModal('particles')}
-                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 text-[11px] font-bold transition"
-                  >
-                    +助詞 (Partículas)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setQuickCatalogModal('kosoado')}
-                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 text-[11px] font-bold transition"
-                  >
-                    +こそあど
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setQuickCatalogModal('time')}
-                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-[11px] font-bold transition"
-                  >
-                    +時間 (Tiempo)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setQuickCatalogModal('grammar')}
-                    className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-bold transition"
-                  >
-                    +文法 (Gramática)
-                  </button>
-                </div>
-
-                {renderInlineTourPointerBubble('tour-quick-catalogs')}
-
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Analizar y Clasificar Automáticamente</span>
-                </button>
-              </form>
-
-              {renderInlineTourPointerBubble('tour-input-box')}
-            </section>
-
-            {/* CARPETAS DINÁMICAS DEL INVENTARIO */}
-            <section
-              id="tour-folders"
-              className={`space-y-3 ${isTargetHighlighted('tour-folders')}`}
-            >
-              {inventory.length > 0 && (
-                <div className="flex items-center justify-between gap-2 bg-[#101624] border border-slate-800 rounded-2xl px-3.5 py-2.5">
-                  <input
-                    type="text"
-                    value={inventorySearch}
-                    onChange={(e) => setInventorySearch(e.target.value)}
-                    placeholder="Buscar palabra, lectura o carpeta en tu inventario..."
-                    className="w-full bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none"
-                  />
-                  {inventorySearch && (
-                    <button
-                      type="button"
-                      onClick={() => setInventorySearch('')}
-                      className="text-slate-400 hover:text-white"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {inventory.length === 0 ? (
-                <div className="bg-[#101624] border border-slate-800 rounded-3xl p-7 text-center space-y-2.5">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center mx-auto text-indigo-400">
-                    <Folder className="w-6 h-6" />
-                  </div>
-                  <h3 className="font-extrabold text-sm sm:text-base text-white">
-                    {username
-                      ? `Todavía no tenés palabras cargadas, ${username}`
-                      : 'Todavía no tenés palabras cargadas'}
-                  </h3>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-                    Esta sección es exclusivamente para lo que vos ya aprendiste. Ingresá tus
-                    propias palabras y partículas arriba o activalas desde los catálogos rápidos
-                    para que el sistema cree cada carpeta gramatical a tu medida.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {groupedFolders.map(([folderName, items]) => {
-                    const isCollapsed = !!collapsedFolders[folderName];
-                    return (
-                      <div
-                        key={folderName}
-                        className="bg-[#101624] border border-slate-800 rounded-2xl overflow-hidden"
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCollapsedFolders((prev) => ({
-                              ...prev,
-                              [folderName]: !prev[folderName]
-                            }))
-                          }
-                          className="w-full px-4 py-3 flex items-center justify-between bg-slate-900/60 hover:bg-slate-900 transition text-left"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <Folder className="w-4 h-4 text-indigo-400 shrink-0" />
-                            <span className="font-extrabold text-xs sm:text-sm text-white truncate">
-                              {folderName}
-                            </span>
-                            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-sky-300 text-[10px] font-bold">
-                              {items.length}
-                            </span>
-                          </div>
-                          {isCollapsed ? (
-                            <ChevronDown className="w-4 h-4 text-slate-400" />
-                          ) : (
-                            <ChevronUp className="w-4 h-4 text-slate-400" />
-                          )}
-                        </button>
-
-                        {!isCollapsed && (
-                          <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {items.map((item) => (
-                              <div
-                                key={item.id}
-                                className="bg-[#090d16] border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between gap-2"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-black text-base text-white">
-                                        {item.word}
-                                      </span>
-                                      <span className="text-[11px] text-indigo-300 font-semibold">
-                                        {item.reading}
-                                      </span>
-                                    </div>
-                                    <p className="text-xs font-bold text-teal-300 mt-0.5">
-                                      {item.meaning}
-                                    </p>
-                                    {item.notes && (
-                                      <p className="text-[11px] text-slate-400 mt-1 leading-snug">
-                                        {item.notes}
-                                      </p>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        speakText(item.word, 'ja', `item-ja-${item.id}`)
-                                      }
-                                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-teal-300 text-[10px] font-bold"
-                                      title="Escuchar en japonés"
-                                    >
-                                      JP
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        speakText(item.meaning, 'es', `item-es-${item.id}`)
-                                      }
-                                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-sky-300 text-[10px] font-bold"
-                                      title="Escuchar significado en español"
-                                    >
-                                      ES
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setInventory((prev) =>
-                                          prev.filter((x) => x.id !== item.id)
-                                        )
-                                      }
-                                      className="p-1 rounded-lg bg-slate-900 hover:bg-rose-950/60 border border-slate-800 text-slate-400 hover:text-rose-300"
-                                      title="Eliminar"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {renderInlineTourPointerBubble('tour-folders')}
-            </section>
-          </div>
-        )}
-
-        {/* --------------------------------------------------------------------
-            PESTAÑA 2: GENERADOR DE ORACIONES (100% CERRADO N5 A N1)
-        -------------------------------------------------------------------- */}
-        {activeTab === 'generator' && (
-          <div className="space-y-4">
-            <section
-              id="tour-gen-modes"
-              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${isTargetHighlighted(
-                'tour-gen-modes'
-              )}`}
-            >
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div>
-                  <h2 className="font-extrabold text-sm sm:text-base text-white">
-                    Generador Estructural de Circuito Cerrado (N5–N1)
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Construye oraciones combinando únicamente el vocabulario y partículas de tu
-                    inventario.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setGeneratorMode('inventory_logic')}
-                  className={`p-3 rounded-2xl border text-left transition ${
-                    generatorMode === 'inventory_logic'
-                      ? 'bg-indigo-600/20 border-indigo-400 text-white'
-                      : 'bg-[#090d16] border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <span className="font-extrabold text-xs block text-white">
-                    1. Según mi Inventario (Automático)
-                  </span>
-                  <span className="text-[11px] text-slate-400 mt-0.5 block">
-                    Deduce las estructuras según los usos y partículas que ya cargaste.
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setGeneratorMode('manual_grammar')}
-                  className={`p-3 rounded-2xl border text-left transition ${
-                    generatorMode === 'manual_grammar'
-                      ? 'bg-sky-600/20 border-sky-400 text-white'
-                      : 'bg-[#090d16] border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <span className="font-extrabold text-xs block text-white">
-                    2. Elegir Usos Gramaticales (9 Categorías)
-                  </span>
-                  <span className="text-[11px] text-slate-400 mt-0.5 block">
-                    Seleccioná manualmente las reglas de N5 a N1 que querés practicar.
-                  </span>
-                </button>
-              </div>
-
-              {renderInlineTourPointerBubble('tour-gen-modes')}
-            </section>
-
-            {/* PANEL DE LAS 9 CATEGORÍAS Y CONTROLES DE FORMALIDAD / TIEMPO */}
-            <section
-              id="tour-gen-categories"
-              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${isTargetHighlighted(
-                'tour-gen-categories'
-              )}`}
-            >
-              {generatorMode === 'manual_grammar' && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <span className="text-xs font-extrabold text-white">
-                      Seleccioná entre las 9 Categorías Gramaticales (N5–N1):
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {['ALL', 'N5', 'N4', 'N3', 'N2', 'N1'].map((lvl) => (
-                        <button
-                          key={lvl}
-                          type="button"
-                          onClick={() => setGrammarLevelFilter(lvl)}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
-                            grammarLevelFilter === lvl
-                              ? 'bg-indigo-600 border-indigo-400 text-white'
-                              : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {lvl === 'ALL' ? 'Todos' : lvl}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {GRAMMAR_CATEGORIES.map((cat) => {
-                      const visibleItems = cat.items.filter((item) => {
-                        if (grammarLevelFilter !== 'ALL' && item.level !== grammarLevelFilter)
-                          return false;
-                        if (!grammarSearch.trim()) return true;
-                        const q = grammarSearch.toLowerCase();
-                        return (
-                          item.name.toLowerCase().includes(q) ||
-                          item.formula.toLowerCase().includes(q) ||
-                          item.desc.toLowerCase().includes(q)
-                        );
-                      });
-                      if (visibleItems.length === 0) return null;
-                      const isOpen = !!openCategories[cat.id];
-
-                      return (
-                        <div
-                          key={cat.id}
-                          className="bg-[#090d16] border border-slate-800 rounded-2xl overflow-hidden"
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenCategories((prev) => ({
-                                ...prev,
-                                [cat.id]: !prev[cat.id]
-                              }))
-                            }
-                            className="w-full px-3.5 py-2.5 flex items-center justify-between text-left hover:bg-slate-900/70 transition"
-                          >
-                            <div>
-                              <span className="font-extrabold text-xs text-white">
-                                {cat.number}. {cat.title}
-                              </span>
-                              <p className="text-[10px] text-slate-400">{cat.subtitle}</p>
-                            </div>
-                            {isOpen ? (
-                              <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                            )}
-                          </button>
-
-                          {isOpen && (
-                            <div className="p-2.5 pt-0 space-y-1.5">
-                              {visibleItems.map((gItem) => {
-                                const isChecked = selectedGrammarIds.includes(gItem.id);
-                                return (
-                                  <button
-                                    key={gItem.id}
-                                    type="button"
-                                    onClick={() =>
-                                      setSelectedGrammarIds((prev) =>
-                                        prev.includes(gItem.id)
-                                          ? prev.length > 1
-                                            ? prev.filter((x) => x !== gItem.id)
-                                            : prev
-                                          : [...prev, gItem.id]
-                                      )
-                                    }
-                                    className={`w-full p-2.5 rounded-xl border text-left flex items-start gap-2.5 transition ${
-                                      isChecked
-                                        ? 'bg-indigo-600/20 border-indigo-400 text-white'
-                                        : 'bg-slate-950/60 border-slate-800/80 text-slate-300'
-                                    }`}
-                                  >
-                                    <div
-                                      className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border shrink-0 ${
-                                        isChecked
-                                          ? 'bg-indigo-500 border-indigo-300 text-white'
-                                          : 'border-slate-700 bg-slate-900'
-                                      }`}
-                                    >
-                                      {isChecked && <Check className="w-3 h-3" />}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className="px-1.5 py-0.2 rounded bg-slate-800 text-sky-300 font-black text-[10px]">
-                                          {gItem.level}
-                                        </span>
-                                        <span className="font-extrabold text-xs text-white">
-                                          {gItem.name}
-                                        </span>
-                                      </div>
-                                      <p className="text-[11px] text-indigo-300 font-semibold mt-0.5">
-                                        {gItem.formula}
-                                      </p>
-                                      <p className="text-[10px] text-slate-400 mt-0.5">
-                                        {gItem.desc}
-                                      </p>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                    Registro (Formal / Informal):
-                  </label>
-                  <div className="grid grid-cols-2 gap-1.5 bg-[#090d16] p-1 rounded-xl border border-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => setFormality('formal')}
-                      className={`py-2 rounded-lg text-xs font-extrabold transition ${
-                        formality === 'formal'
-                          ? 'bg-indigo-600 text-white'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Formal (です・ます)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormality('informal')}
-                      className={`py-2 rounded-lg text-xs font-extrabold transition ${
-                        formality === 'informal'
-                          ? 'bg-indigo-600 text-white'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Informal (普通形)
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1">
-                    Tiempo y Polaridad:
-                  </label>
-                  <select
-                    value={polarityTense}
-                    onChange={(e) => setPolarityTense(e.target.value)}
-                    className="w-full bg-[#090d16] border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none"
-                  >
-                    <option value="present_aff">Afirmativo (Presente / Futuro)</option>
-                    <option value="present_neg">Negativo (Presente / Futuro)</option>
-                    <option value="past_aff">Pasado Afirmativo</option>
-                    <option value="past_neg">Pasado Negativo</option>
-                    <option value="question">Interrogativo (Pregunta か)</option>
-                  </select>
-                </div>
-              </div>
-
-              {renderInlineTourPointerBubble('tour-gen-categories')}
-            </section>
-
-            {/* BOTÓN DE GENERACIÓN CERRADA */}
-            <section
-              id="tour-gen-button"
-              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg ${isTargetHighlighted(
-                'tour-gen-button'
-              )}`}
-            >
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-slate-400">Cantidad:</span>
-                  {[1, 3, 5].map((cnt) => (
-                    <button
-                      key={cnt}
-                      type="button"
-                      onClick={() => setSentenceCount(cnt)}
-                      className={`px-3 py-1 rounded-xl text-xs font-extrabold border ${
-                        sentenceCount === cnt
-                          ? 'bg-indigo-600 border-indigo-400 text-white'
-                          : 'bg-[#090d16] border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {cnt} {cnt === 1 ? 'oración' : 'oraciones'}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowReadings((prev) => !prev)}
-                  className="px-3 py-1 rounded-xl bg-[#090d16] border border-slate-800 text-slate-300 text-xs font-bold flex items-center gap-1.5"
-                >
-                  <Eye className="w-3.5 h-3.5 text-sky-400" />
-                  <span>{showReadings ? 'Ocultar Lectura' : 'Mostrar Lectura'}</span>
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleGenerateClosedSentences}
-                className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition"
-              >
-                <Play className="w-4 h-4" />
-                <span>Generar Oraciones (100% Cerrado)</span>
-              </button>
-
-              {renderInlineTourPointerBubble('tour-gen-button')}
-            </section>
-
-            {/* RESULTADOS DEL GENERADOR */}
-            {generatedResults && (
-              <div className="space-y-3">
-                {generatedResults.error ? (
-                  <div className="bg-rose-950/40 border border-rose-500/40 rounded-2xl p-4 space-y-1.5">
-                    <h3 className="font-extrabold text-xs sm:text-sm text-rose-200 flex items-center gap-1.5">
-                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                      <span>{generatedResults.title}</span>
-                    </h3>
-                    <p className="text-xs text-slate-300">{generatedResults.detail}</p>
-                  </div>
-                ) : (
-                  generatedResults.items.map((sent) => {
-                    const isSaved = savedSentences.some((s) => s.japanese === sent.japanese);
-                    return (
-                      <div
-                        key={sent.id}
-                        className="bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg"
-                      >
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 font-black text-[10px]">
-                              {sent.level}
-                            </span>
-                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-sky-300 font-bold text-[10px]">
-                              {sent.grammarName}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-semibold">
-                              {sent.formalityLabel}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => speakText(sent.japanese, 'ja', `gen-ja-${sent.id}`)}
-                              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-[11px] font-bold flex items-center gap-1"
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                              <span>JP</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => speakText(sent.translation, 'es', `gen-es-${sent.id}`)}
-                              className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1"
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                              <span>ES</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleSaveSentence(sent)}
-                              className={`p-1.5 rounded-xl border transition ${
-                                isSaved
-                                  ? 'bg-indigo-600/30 border-indigo-400 text-indigo-200'
-                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                              }`}
-                              title="Guardar oración"
-                            >
-                              <Bookmark className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="bg-[#090d16] border border-slate-800/90 rounded-2xl p-3.5 space-y-1.5">
-                          <p className="text-lg sm:text-xl font-black text-white tracking-wide">
-                            {sent.japanese}
-                          </p>
-                          {showReadings && (
-                            <p className="text-xs text-indigo-300 font-semibold">{sent.reading}</p>
-                          )}
-                          <p className="text-sm font-bold text-teal-300 pt-0.5">
-                            {sent.translation}
-                          </p>
-                          <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-800/80">
-                            <b className="text-slate-300">Estructura literal:</b>{' '}
-                            {sent.literalTranslation}
-                          </p>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {sent.tokens.map((tok, tIdx) => (
-                            <div
-                              key={`${sent.id}-tok-${tIdx}`}
-                              className="bg-[#090d16] border border-slate-800/80 rounded-xl p-2.5"
-                            >
-                              <div className="flex items-center justify-between gap-1">
-                                <span className="font-black text-xs text-white">{tok.surface}</span>
-                                <span className="text-[10px] font-bold text-sky-300">
-                                  {tok.role}
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                                {tok.detail}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* --------------------------------------------------------------------
-            PESTAÑA 3: SALA DE PRÁCTICA LIBRE (BOCINAS INDEPENDIENTES + AUDITOR)
-        -------------------------------------------------------------------- */}
-        {activeTab === 'practice' && (
-          <div className="space-y-4">
-            <section
-              id="tour-practice-room"
-              className={`bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3.5 shadow-lg ${isTargetHighlighted(
-                'tour-practice-room'
-              )}`}
-            >
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <PenTool className="w-4 h-4 text-teal-400 shrink-0" />
-                  <h2 className="font-extrabold text-sm sm:text-base text-white">
-                    {username
-                      ? `Sala de Práctica Libre de ${username} (N5 a N1)`
-                      : 'Sala de Práctica Libre (N5 a N1)'}
-                  </h2>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setBackupModalOpen(true)}
-                  className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-indigo-500/40 text-indigo-300 text-[11px] font-bold flex items-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Respaldo JSON</span>
-                </button>
-              </div>
-
-              {/* CHIPS DE APOYO PARA INSERTAR RÁPIDO */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {[
-                    { id: 'kosoado', label: 'こそあど' },
-                    { id: 'time', label: 'Tiempo' },
-                    { id: 'particles', label: 'Partículas' }
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setPracticeTabChip(tab.id)}
-                      className={`px-3 py-1 rounded-full text-[11px] font-extrabold border transition ${
-                        practiceTabChip === tab.id
-                          ? 'bg-teal-950/80 border-teal-400 text-teal-300'
-                          : 'bg-[#090d16] border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="bg-[#090d16] border border-slate-800 rounded-2xl p-2.5 flex items-center gap-1.5 flex-wrap max-h-32 overflow-y-auto">
-                  {(practiceTabChip === 'kosoado'
-                    ? KOSOADO_CATALOG.slice(0, 8)
-                    : practiceTabChip === 'time'
-                    ? TIME_CATALOG.slice(0, 8)
-                    : PARTICLE_CATALOG.slice(0, 10)
-                  ).map((chip) => (
-                    <button
-                      key={chip.word}
-                      type="button"
-                      onClick={() => setFreeInputSentence((prev) => `${prev}${chip.word}`)}
-                      className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-white font-bold flex items-center gap-1.5 transition"
-                    >
-                      <span>{chip.word}</span>
-                      <span className="text-[10px] text-slate-400 font-normal">
-                        {chip.meaning.split('/')[0]}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {livePreviewPracticeBanner && (
-                <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-sky-500/40 rounded-xl px-3 py-2 text-xs text-sky-200 font-semibold">
-                  <span>{livePreviewPracticeBanner}</span>
-                  <button
-                    type="button"
-                    onClick={() => setLivePreviewPracticeBanner('')}
-                    className="text-slate-400 hover:text-white"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-
-              <form onSubmit={handleAuditFreePractice} className="space-y-3">
-                {/* CAJA 1: ORACIÓN EN JAPONÉS CON SUS BOCINAS EXCLUSIVAS */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <label className="text-xs font-bold text-slate-300">
-                      Tu oración o palabra en Japonés:
-                    </label>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          speakText(freeInputSentence, 'ja', 'prac-jp-ja', 'practice')
-                        }
-                        className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-[11px] font-bold flex items-center gap-1"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>Leer en JP</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          speakText(freeInputSentence, 'es', 'prac-jp-es', 'practice')
-                        }
-                        className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>Leer en ES</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <textarea
-                    rows={2}
-                    value={freeInputSentence}
-                    onChange={(e) => setFreeInputSentence(e.target.value)}
-                    placeholder="Escribí cualquier oración o saludo en japonés (ej: こんにちは, おはよう, 私は車を買う)..."
-                    className="w-full bg-[#090d16] border border-slate-800 focus:border-teal-400 rounded-2xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none"
-                  />
-                </div>
-
-                {/* CAJA 2: SIGNIFICADO EN ESPAÑOL CON SUS BOCINAS 100% INDEPENDIENTES */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <label className="text-xs font-bold text-slate-300">
-                      Significado o traducción en Español:
-                    </label>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          speakText(freeInputMeaning, 'es', 'prac-es-es', 'practice')
-                        }
-                        className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-[11px] font-bold flex items-center gap-1"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>Leer en ES</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          speakText(freeInputMeaning, 'ja', 'prac-es-ja', 'practice')
-                        }
-                        className="px-2.5 py-1 rounded-full bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-[11px] font-bold flex items-center gap-1"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>Leer en JP</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <input
-                    type="text"
-                    value={freeInputMeaning}
-                    onChange={(e) => setFreeInputMeaning(e.target.value)}
-                    placeholder="Opcional: ¿Qué quisiste decir en español?"
-                    className="w-full bg-[#090d16] border border-slate-800 focus:border-teal-400 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="submit"
-                    className="flex-1 py-3 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition"
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span>Revisar Gramática y Partículas</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFreeInputSentence('');
-                      setFreeInputMeaning('');
-                      setFreeAuditResult(null);
-                      setLivePreviewPracticeBanner('');
-                    }}
-                    className="px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-xs"
-                  >
-                    Limpiar
-                  </button>
-                </div>
-              </form>
-
-              {renderInlineTourPointerBubble('tour-practice-room')}
-            </section>
-
-            {/* RESULTADO DEL AUDITOR DE PRÁCTICA LIBRE */}
-            {freeAuditResult && (
-              <div className="bg-[#101624] border border-slate-800 rounded-3xl p-4 space-y-3 shadow-lg">
-                <div className="flex items-center justify-between gap-2">
-                  <span
-                    className={`px-3 py-0.5 rounded-full text-xs font-black border ${
-                      freeAuditResult.isValid
-                        ? 'bg-teal-950/80 border-teal-500/40 text-teal-300'
-                        : 'bg-amber-950/80 border-amber-500/40 text-amber-300'
-                    }`}
-                  >
-                    {freeAuditResult.score}
-                  </span>
-                  <span className="text-xs font-black text-indigo-300">
-                    {freeAuditResult.level}
-                  </span>
-                </div>
-
-                <div className="bg-[#090d16] border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-bold block">
-                      Oración verificada:
-                    </span>
-                    <p className="text-lg font-black text-white mt-0.5">
-                      {freeAuditResult.verifiedSentence}
-                    </p>
-                    <p className="text-xs font-bold text-teal-300 mt-0.5">
-                      {freeAuditResult.translation}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        speakText(freeAuditResult.verifiedSentence, 'ja', 'audit-res-ja')
-                      }
-                      className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-teal-500/40 text-teal-300 text-xs font-bold flex items-center gap-1"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>Audio JP</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        speakText(freeAuditResult.translation, 'es', 'audit-res-es')
-                      }
-                      className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/40 text-sky-300 text-xs font-bold flex items-center gap-1"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>Audio ES</span>
-                    </button>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-300 leading-relaxed">{freeAuditResult.feedback}</p>
-
-                <div className="space-y-2">
-                  {freeAuditResult.tokens.map((tok, i) => (
-                    <div
-                      key={`audit-tok-${i}`}
-                      className="bg-[#090d16] border border-slate-800/90 rounded-xl p-3"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-black text-xs text-white">{tok.surface}</span>
-                        <span className="text-[10px] font-bold text-sky-300">{tok.role}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-1">{tok.detail}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* --------------------------------------------------------------------
-            PESTAÑA 4: ORACIONES GUARDADAS
-        -------------------------------------------------------------------- */}
-        {activeTab === 'saved' && (
-          <div className="space-y-3">
-            <div className="bg-[#101624] border border-slate-800 rounded-3xl p-4 flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h2 className="font-extrabold text-sm sm:text-base text-white">
-                  Oraciones Guardadas ({savedSentences.length})
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Tus estructuras favoritas listas para repasar o exportar en JSON.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleExportJSON}
-                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-indigo-500/40 text-indigo-300 text-xs font-bold flex items-center gap-1.5"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Exportar JSON</span>
-              </button>
+              {renderTabPanel(exitingTab, true)}
             </div>
+          )}
 
-            {savedSentences.length === 0 ? (
-              <div className="bg-[#101624] border border-slate-800 rounded-3xl p-7 text-center space-y-2">
-                <Bookmark className="w-8 h-8 text-indigo-400 mx-auto" />
-                <p className="font-bold text-sm text-white">Aún no guardaste oraciones</p>
-                <p className="text-xs text-slate-400">
-                  Tocá el ícono de marcador en el Generador para conservar las oraciones que más te
-                  sirvan.
-                </p>
-              </div>
-            ) : (
-              savedSentences
-                .filter((s) =>
-                  !savedSearch.trim()
-                    ? true
-                    : s.japanese.toLowerCase().includes(savedSearch.toLowerCase()) ||
-                      s.translation.toLowerCase().includes(savedSearch.toLowerCase())
-                )
-                .map((sent, idx) => (
-                  <div
-                    key={`saved-${idx}`}
-                    className="bg-[#101624] border border-slate-800 rounded-2xl p-4 space-y-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-base sm:text-lg font-black text-white">
-                          {sent.japanese}
-                        </p>
-                        <p className="text-xs font-bold text-teal-300 mt-0.5">
-                          {sent.translation}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => speakText(sent.japanese, 'ja', `sav-ja-${idx}`)}
-                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-teal-300 text-[10px] font-bold"
-                        >
-                          JP
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => speakText(sent.translation, 'es', `sav-es-${idx}`)}
-                          className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-sky-300 text-[10px] font-bold"
-                        >
-                          ES
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleSaveSentence(sent)}
-                          className="p-1 rounded-lg bg-slate-900 border border-slate-800 text-rose-300"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-            )}
+          <div
+            key={`tab-enter-${activeTab}`}
+            className="w-full relative z-20 will-change-transform"
+            style={
+              tabAnimSeq > 0
+                ? {
+                    animation:
+                      tabSlideDirection === 'forward'
+                        ? 'tabSlideInRight 380ms cubic-bezier(0.22, 1, 0.36, 1) both'
+                        : 'tabSlideInLeft 380ms cubic-bezier(0.22, 1, 0.36, 1) both'
+                  }
+                : undefined
+            }
+          >
+            {renderTabPanel(activeTab, false)}
           </div>
-        )}
+        </div>
       </main>
 
       {/* ========================================================================
@@ -4107,62 +4638,90 @@ export default function App() {
 
         {!bottomNavCollapsed && (
           <nav className="w-full bg-[#0b101b]/95 backdrop-blur-md border-t border-slate-800/90 px-2 py-1.5 pointer-events-auto">
-            <div className="max-w-3xl mx-auto grid grid-cols-4 gap-1">
-              <button
-                type="button"
-                onClick={() => setActiveTab('inventory')}
-                className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition ${
-                  activeTab === 'inventory'
-                    ? 'bg-indigo-600/20 text-indigo-300 font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Layers className="w-4 h-4" />
-                <span className="text-[10px]">Inventario ({inventory.length})</span>
-              </button>
+            <div className="max-w-3xl mx-auto relative">
+              {/* Indicador deslizante superior sincronizado con la pestaña activa */}
+              <div className="pointer-events-none absolute -top-1.5 left-0 right-0 h-0.5 overflow-hidden">
+                <div
+                  className="w-1/4 h-full px-3 transition-transform duration-300 ease-out"
+                  style={{ transform: `translate3d(${activeTabIndex * 100}%, 0, 0)` }}
+                >
+                  <div
+                    className={`w-full h-full rounded-full ${
+                      activeTab === 'generator'
+                        ? 'bg-sky-400'
+                        : activeTab === 'practice'
+                        ? 'bg-teal-400'
+                        : 'bg-indigo-400'
+                    }`}
+                  />
+                </div>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('generator')}
-                className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition ${
-                  activeTab === 'generator'
-                    ? 'bg-sky-600/20 text-sky-300 font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Play className="w-4 h-4" />
-                <span className="text-[10px]">Generador</span>
-              </button>
+              <div className="grid grid-cols-4 gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleSwitchTab('inventory')}
+                  className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all duration-200 ${
+                    activeTab === 'inventory'
+                      ? 'bg-indigo-600/20 text-indigo-300 font-bold scale-[1.02]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Layers className="w-4 h-4" />
+                  <span className="text-[10px]">Inventario ({inventory.length})</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('practice')}
-                className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition ${
-                  activeTab === 'practice'
-                    ? 'bg-teal-600/20 text-teal-300 font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <PenTool className="w-4 h-4" />
-                <span className="text-[10px]">Práctica Libre</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchTab('generator')}
+                  className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all duration-200 ${
+                    activeTab === 'generator'
+                      ? 'bg-sky-600/20 text-sky-300 font-bold scale-[1.02]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Play className="w-4 h-4" />
+                  <span className="text-[10px]">Generador</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('saved')}
-                className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition ${
-                  activeTab === 'saved'
-                    ? 'bg-indigo-600/20 text-indigo-300 font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Bookmark className="w-4 h-4" />
-                <span className="text-[10px]">Guardadas ({savedSentences.length})</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchTab('practice')}
+                  className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all duration-200 ${
+                    activeTab === 'practice'
+                      ? 'bg-teal-600/20 text-teal-300 font-bold scale-[1.02]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <PenTool className="w-4 h-4" />
+                  <span className="text-[10px]">Práctica Libre</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSwitchTab('saved')}
+                  className={`py-1.5 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all duration-200 ${
+                    activeTab === 'saved'
+                      ? 'bg-indigo-600/20 text-indigo-300 font-bold scale-[1.02]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Bookmark className="w-4 h-4" />
+                  <span className="text-[10px]">Guardadas ({savedSentences.length})</span>
+                </button>
+              </div>
             </div>
           </nav>
         )}
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <MiJaponesApp />
+    </AppErrorBoundary>
   );
 }
