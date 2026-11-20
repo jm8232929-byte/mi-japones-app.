@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.vercel.mi_japones_app_t1xv.twa",
+        "sha256_cert_fingerprints": ["B4:D6:A5:43:0A:20:A7:BD:90:9F:EA:59:13:53:7F:43:DC:E9:F6:2C:E7:4D:61:CA:2C:B2:45:47:FF:D8:33:B5"]
+      }
+    }]
